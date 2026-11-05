@@ -1,0 +1,25 @@
+global:
+  DeltaSplineBins: 0.001
+species:
+  - speciesblock: Ni
+    ndensityi: 2
+    npoti: FinnisSinclairShiftedScaled
+    parameters: [1, 1, 1, 0.5]
+    rho_core_cut: 200000
+    drho_core_cut: 150
+    nradmaxi: 1
+    lmaxi: 2
+    rcutij: 8.75
+    dcutij: 0.01
+    NameOfCutoffFunctionij: cos
+    r_in: 0
+    delta_in: 0
+    inner_cutoff_type: density
+    nradbaseij: 1
+    radbase: ChebPow
+    radparameters: [2.5]
+    radcoefficients: [[[-0.80489647301554923], [-0.019450650529781566], [3.0023676020285288]]]
+    core-repulsion: [0, 8]
+    nbody:
+      - {type: Ni Ni, nr: [1], nl: [0], c: [0.97247460206019432, 1.9934090533181807]}
+      - {type: Ni Ni Ni, nr: [1, 1], nl: [1, 1], c: [1.0311849478835837, 1.9524640612967836]}

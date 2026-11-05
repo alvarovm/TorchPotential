@@ -1,0 +1,90 @@
+global:
+  DeltaSplineBins: 0.001
+species:
+  - speciesblock: Al
+    ndensityi: 1
+    npoti: FinnisSinclair
+    parameters: [1, 1]
+    rho_core_cut: 100000
+    drho_core_cut: 250
+    nradmaxi: 1
+    lmaxi: 2
+    rcutij: 8.6999999999999993
+    dcutij: 0.01
+    NameOfCutoffFunctionij: cos
+    r_in: 0
+    delta_in: 0
+    inner_cutoff_type: density
+    nradbaseij: 2
+    radbase: ChebExpCos
+    radparameters: [3]
+    radcoefficients: [[[-8.7984616810309522, 0.25097645313698075], [0.0915773357138705, -0.073348902203318231], [1.0549095638202692, 2.0078185734680782]]]
+    core-repulsion: [400, 7]
+    nbody:
+      - {type: Al Al, nr: [1], nl: [0], c: [-1.5194151658354214]}
+      - {type: Al Al, nr: [2], nl: [0], c: [7.8704979239404533]}
+      - {type: Al Al Al, nr: [1, 1], nl: [1, 1], c: [-29.048633701286732]}
+      - {type: Al Al Al Al, nr: [1, 1, 1], nl: [1, 1, 0], lint: [0], c: [1.0002369897784298]}
+      - {type: Al Al Al Al Al, nr: [1, 1, 1, 1], nl: [1, 1, 1, 1], lint: [2, 2], c: [-0.20722578208741371]}
+  - speciesblock: Al Ni
+    nradmaxi: 2
+    lmaxi: 1
+    rcutij: 8.7100000000000009
+    dcutij: 0.01
+    NameOfCutoffFunctionij: cos
+    r_in: 0
+    delta_in: 0
+    inner_cutoff_type: density
+    nradbaseij: 1
+    radbase: ChebExpCos
+    radparameters: [3.2000000000000002]
+    radcoefficients: [[[-6.226702419732483], [0.034056859582748317]], [[1.969165643157782], [2.5005847499407166]]]
+    core-repulsion: [550, 10]
+    nbody:
+      - {type: Al Ni, nr: [1], nl: [0], c: [-1.0619598337233351]}
+      - {type: Al Al Ni, nr: [1, 2], nl: [1, 1], c: [0.049527270783761013]}
+      - {type: Al Al Ni Ni, nr: [1, 1, 1], nl: [1, 1, 0], lint: [0], c: [-6.254907417758889]}
+      - {type: Al Al Ni Ni Ni, nr: [1, 1, 1, 1], nl: [1, 1, 1, 1], lint: [2, 2], c: [-0.34917563316868627]}
+  - speciesblock: Ni
+    ndensityi: 2
+    npoti: FinnisSinclairShiftedScaled
+    parameters: [1, 1, 1, 0.5]
+    rho_core_cut: 200000
+    drho_core_cut: 150
+    nradmaxi: 1
+    lmaxi: 2
+    rcutij: 8.75
+    dcutij: 0.01
+    NameOfCutoffFunctionij: cos
+    r_in: 0
+    delta_in: 0
+    inner_cutoff_type: density
+    nradbaseij: 1
+    radbase: ChebPow
+    radparameters: [2.5]
+    radcoefficients: [[[-0.81312605639294844], [-0.023034506690616595], [2.9954590310338012]]]
+    core-repulsion: [500, 8]
+    nbody:
+      - {type: Ni Ni, nr: [1], nl: [0], c: [-0.086891942761080865, -0.86322334852897264]}
+      - {type: Ni Ni Ni, nr: [1, 1], nl: [1, 1], c: [3.8372598778511007, 6.3302200210370927]}
+      - {type: Ni Ni Ni Ni, nr: [1, 1, 1], nl: [1, 1, 0], lint: [0], c: [1.3337609465163283, 1.785825313223401]}
+      - {type: Ni Ni Ni Ni Ni, nr: [1, 1, 1, 1], nl: [1, 1, 1, 1], lint: [2, 2], c: [-0.20645287727205341, 0.93640156116031392]}
+  - speciesblock: Ni Al
+    nradmaxi: 2
+    lmaxi: 1
+    rcutij: 8.7100000000000009
+    dcutij: 0.01
+    NameOfCutoffFunctionij: cos
+    r_in: 0
+    delta_in: 0
+    inner_cutoff_type: density
+    nradbaseij: 1
+    radbase: ChebExpCos
+    radparameters: [3.2000000000000002]
+    radcoefficients: [[[-6.226702419732483], [0.034056859582748317]], [[1.969165643157782], [2.5005847499407166]]]
+    core-repulsion: [550, 10]
+    nbody:
+      - {type: Ni Al, nr: [1], nl: [0], c: [13.592359500222079, 4.0052661921999109]}
+      - {type: Ni Al Ni, nr: [1, 1], nl: [1, 1], c: [9.6598527234533975, 2.6205221221209234]}
+      - {type: Ni Al Al Ni, nr: [1, 1, 1], nl: [1, 1, 0], lint: [0], c: [3.5116596941131357, 2.0083561930833036]}
+      - {type: Ni Al Al Ni Ni, nr: [1, 1, 1, 1], nl: [1, 1, 1, 1], lint: [2, 2], c: [1.1002603051499154, 1.9685080260084289]}

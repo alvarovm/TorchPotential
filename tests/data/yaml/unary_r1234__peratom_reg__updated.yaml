@@ -1,0 +1,28 @@
+global:
+  DeltaSplineBins: 0.001
+species:
+  - speciesblock: Al
+    ndensityi: 1
+    npoti: FinnisSinclairShiftedScaled
+    parameters: [1, 1]
+    rho_core_cut: 100000
+    drho_core_cut: 250
+    nradmaxi: 2
+    lmaxi: 2
+    rcutij: 8.6999999999999993
+    dcutij: 0.01
+    NameOfCutoffFunctionij: cos
+    r_in: 0
+    delta_in: 0
+    inner_cutoff_type: density
+    nradbaseij: 2
+    radbase: ChebExpCos
+    radparameters: [3]
+    radcoefficients: [[[1.0513870285623546, 6.9884556588552682], [1.9917536433795817, 8.0517119007627596], [3.014241109148561, 8.9650819432670446]], [[4.0651182293368704, 10.010600131477867], [5.0105601188799005, 11.017573240959313], [5.9611504543341729, 12.048159352906938]]]
+    core-repulsion: [0, 0]
+    nbody:
+      - {type: Al Al, nr: [1], nl: [0], c: [0.95991947231423158]}
+      - {type: Al Al, nr: [2], nl: [0], c: [1.016979740618255]}
+      - {type: Al Al Al, nr: [1, 1], nl: [1, 1], c: [2.0027618126835973]}
+      - {type: Al Al Al Al, nr: [1, 1, 1], nl: [1, 1, 0], lint: [0], c: [3.0222728272170087]}
+      - {type: Al Al Al Al Al, nr: [1, 1, 1, 1], nl: [1, 1, 1, 1], lint: [2, 2], c: [4.0164106152459542]}

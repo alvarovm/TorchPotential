@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "torchpotential"
+version = "0.1.0"
+description = "PyTorch backend for fitting Atomic Cluster Expansion potentials (replacement of the TensorFlow-based TensorPotential used by pyace/pacemaker)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "LicenseRef-Academic-Software-License"
+license-files = ["LICENSE.md"]
+authors = [
+    { name = "Yury Lysogorskiy" },
+    { name = "Anton Bochkarev" },
+    { name = "Ralf Drautz" },
+]
+dependencies = [
+    "numpy>=2.0,<3",
+    "scipy",
+    "pandas>=2,<4",
+    "torch>=2.4",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
