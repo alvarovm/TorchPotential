@@ -9,4 +9,4 @@ from . import torchpot
 from . import fit
 from . import fitmetrics
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

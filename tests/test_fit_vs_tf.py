@@ -17,7 +17,7 @@ from helpers import make_structures, make_df
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def run_case(case, start=None):
+def run_case(case, start=None, pool=None, device=None):
     bconf = BBasisConfiguration(os.path.join(HERE, "data", "yaml", case["yaml"]))
     for blk in bconf.funcspecs_blocks:  # the TF references contain no core repulsion (see test_tf_parity.load)
         blk.core_rep_parameters = [0.0, 1.0]
@@ -31,13 +31,13 @@ def run_case(case, start=None):
              L1_REG: case["L1"] / n_batches, L2_REG: case["L2"] / n_batches}
     if aux:
         specs[AUX_LOSS_FACTOR] = [w / n_batches for w in case["aux_w"]]
-    ace = ACE(bconf, compute_orthogonality=aux, compute_smoothness=aux)
+    ace = ACE(bconf, compute_orthogonality=aux, compute_smoothness=aux, device=device)
     if start is None:
         rng = np.random.default_rng(case["seed"] + 11)
         c0 = ace.get_coefs().detach().cpu().numpy()
         start = c0 + case["perturb"] * rng.normal(size=c0.shape)
     ace.set_coefs(start)
-    fitter = FitTorchPotential(TorchPotential(ace, loss_specs=specs), display_step=1000)
+    fitter = FitTorchPotential(TorchPotential(ace, loss_specs=specs), display_step=1000, pool=pool)
     fitter.nfuncs = bconf.total_number_of_functions
     jf = None
     if case["mask_radial"]:

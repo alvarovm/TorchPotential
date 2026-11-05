@@ -8,13 +8,14 @@ from scipy.optimize import minimize, dual_annealing
 from torchpotential.constants import *
 from torchpotential.fitmetrics import FitMetrics
 from torchpotential.indexing import Batch
-from torchpotential.utils.utilities import batching_data
+from torchpotential.utils.utilities import batch_errors, batching_data
 
 log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
 
 NUMPY_OPTIMIZERS = ["BFGS", "L-BFGS-B", "CG", "trf", "dogbox", "lm", "dual_annealing"]
 TORCH_OPTIMIZERS = ["Adam", "SGD"]
+DISTRIBUTED_OPTIMIZERS = ["BFGS", "L-BFGS-B", "CG", "dual_annealing"]  # a scalar objective with its gradient
 
 
 class _KerasAdam:
@@ -46,8 +47,11 @@ class _KerasAdam:
 class FitTorchPotential:
     """Fits the coefficients of a :class:`TorchPotential` (API-compatible with ``FitTensorPotential``)."""
 
-    def __init__(self, tensorpot, display_step=20, batch_size=10, eager=False):
+    def __init__(self, tensorpot, display_step=20, batch_size=10, eager=False, pool=None):
         self.tensorpot = tensorpot
+        # optional ``torchpotential.distributed.DevicePool``: the batches are spread over its devices
+        self.pool = pool
+        self._local_idx = None  # indices (into the training batches) evaluated by this process when distributed
         self.ncoefs = self.tensorpot.potential.ncoef
         self.fit_coefs = None
         self.jacobian_factor = None
@@ -96,6 +100,46 @@ class FitTorchPotential:
         for b in np_batches:
             self._tbatches.pop(id(b), None)
 
+    # ------------------------------------------------------------------------------------------------
+    # several devices
+    # ------------------------------------------------------------------------------------------------
+    def _distribute(self, batches):
+        """Spread the training batches over the ranks of the pool; this process keeps (and registers) its own share."""
+        from torchpotential.distributed import batch_cost, shard_batches
+
+        world = self.pool.world_size
+        shards = shard_batches([batch_cost(b) for b in batches], world)
+        if len(batches) < 4 * world:
+            log.warning(
+                "Only %d batches for %d devices: the load is poorly balanced; use a smaller batch_size",
+                len(batches),
+                world,
+            )
+        log.info("Batches per device: %s", [len(s) for s in shards])
+        self._local_idx = shards[0]
+        self._register([batches[i] for i in self._local_idx])
+        worker_items = [[(i, batches[i]) for i in shard] for shard in shards[1:]]
+        self.pool.setup(self.tensorpot.potential, self.tensorpot.loss_specs, worker_items)
+
+    def _evaluate_all(self, x, batches):
+        """Loss, summed gradient and the per-batch errors (in batch order) of all ``batches`` at coefficients ``x``."""
+        if self._local_idx is None:
+            tot_loss = 0
+            tot_jac = 0
+            errors = []
+            for b in batches:
+                loss, jac, e, f = self.tensorpot.external_fit(x, self._tbatch(b), eager=self.eager)
+                tot_jac += jac.cpu().numpy()
+                tot_loss += float(loss)
+                errors.append(self.compute_batch_errors(b, e.cpu().numpy(), f.cpu().numpy()))
+            return tot_loss, tot_jac, errors
+
+        from torchpotential.distributed import evaluate_batches, merge_results
+
+        local = [(i, batches[i], self._tbatch(batches[i])) for i in self._local_idx]
+        results = self.pool.evaluate(x, lambda: evaluate_batches(self.tensorpot, x, local))
+        return merge_results(results)
+
     def fit(
         self,
         df,
@@ -117,9 +161,21 @@ class FitTorchPotential:
             self.test_metric_callback = test_metric_callback
 
         self._tbatches = {}
+        self._local_idx = None
+        distributed = self.pool is not None and self.pool.world_size > 1
+        if distributed and optimizer not in DISTRIBUTED_OPTIMIZERS:
+            raise NotImplementedError(
+                "Optimizer `{}` is not supported with several devices; use one of {}".format(
+                    optimizer, DISTRIBUTED_OPTIMIZERS
+                )
+            )
         self.data_df = df
         self.batch_size = batch_size
-        batches = self._register(batching_data(self.data_df, batch_size=batch_size))
+        batches = batching_data(self.data_df, batch_size=batch_size)
+        if distributed:
+            self._distribute(batches)
+        else:
+            self._register(batches)
         self._train_batches = batches
         self.n_batches = len(batches)
 
@@ -327,28 +383,13 @@ class FitTorchPotential:
         return tot_jac
 
     def fit_func(self, x, batches):
-        tot_loss = 0
-        tot_jac = 0
-        errors = []
         t0 = time.time()
-        for b in batches:
-            loss, jac, e, f = self.tensorpot.external_fit(x, self._tbatch(b), eager=self.eager)
-            tot_jac += jac.cpu().numpy()
-            tot_loss += float(loss)
-            errors.append(self.compute_batch_errors(b, e.cpu().numpy(), f.cpu().numpy()))
-
+        tot_loss, tot_jac, errors = self._evaluate_all(x, batches)
         self._record_evaluation(x, tot_loss, errors, t0)
         return tot_loss, self._apply_jacobian_factor(tot_jac)
 
     def compute_batch_errors(self, b, e, f):
-        e_true = b["energy"]
-        f_true = b["forces"]
-        _, nat = np.unique(b["e_map"], return_counts=True)
-        de = e_true - e
-        de_pa = de / nat.reshape(-1, 1)
-        df = f_true - f
-
-        return de, de_pa, df, nat.reshape(-1, 1)
+        return batch_errors(b, e, f)
 
     def callback(self, x, *args, **kwargs):
         # call global callback
@@ -438,6 +479,10 @@ class FitTorchPotential:
             pred_dict["total_na"].append(errors[3])
         if temporary:
             self._forget(batches)
+        elif self._local_idx is not None and batches is self._train_batches:
+            # keep only this process's share of the training batches on the device
+            local = set(self._local_idx)
+            self._forget([b for i, b in enumerate(batches) if i not in local])
 
         return pred_dict
 
@@ -566,16 +611,8 @@ class DAfunc:
 
     def run_fit(self, x, batches):
         fit = self.tensorpot_fit
-        tot_loss = 0
-        tot_jac = 0
-        errors = []
         t0 = time.time()
-        for b in batches:
-            loss, jac, e, f = fit.tensorpot.external_fit(x, fit._tbatch(b), eager=fit.eager)
-            tot_jac += jac.cpu().numpy()
-            tot_loss += float(loss)
-            errors.append(fit.compute_batch_errors(b, e.cpu().numpy(), f.cpu().numpy()))
-
+        tot_loss, tot_jac, errors = fit._evaluate_all(x, batches)
         fit._record_evaluation(x.copy(), tot_loss, errors, t0)
         self.last_loss = fit.loss_history[-1]
         return tot_loss, fit._apply_jacobian_factor(tot_jac)

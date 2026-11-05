@@ -90,19 +90,38 @@ def supply_batch(data):
     return batch_data
 
 
+def batch_errors(b, e, f):
+    """Energy/force residuals of one numpy batch: ``(de, de_pa, df, n_atoms_per_structure)``."""
+    _, nat = np.unique(b["e_map"], return_counts=True)
+    de = b["energy"] - e
+    de_pa = de / nat.reshape(-1, 1)
+    df = b["forces"] - f
+    return de, de_pa, df, nat.reshape(-1, 1)
+
+
 def get_gpu_memory(gpu_id):
     """Total memory of the GPU in MB."""
     return torch.cuda.get_device_properties(gpu_id).total_memory // (1024 * 1024)
 
 
 def _set_gpu_config(config=None):
+    """Validate ``gpu_config``. ``gpu_ind`` is an int (single device, ``< 0`` = CPU) or a non-empty list of
+    non-negative ints (one worker process per entry; repeating an index runs several processes on one GPU)."""
     conf_dict = {GPU_INDEX: 0, GPU_MEMORY_LIMIT: 0}
 
     if config is not None:
         assert isinstance(config, dict), "gpu_config must be a dict"
         if GPU_INDEX in config:
-            assert isinstance(config[GPU_INDEX], int), "{} must be an integer".format(GPU_INDEX)
-            conf_dict[GPU_INDEX] = config[GPU_INDEX]
+            idx = config[GPU_INDEX]
+            if isinstance(idx, (list, tuple)):
+                assert len(idx) > 0, "{} must not be an empty list".format(GPU_INDEX)
+                assert all(isinstance(i, int) and not isinstance(i, bool) and i >= 0 for i in idx), (
+                    "{} list must contain non-negative integers".format(GPU_INDEX)
+                )
+                conf_dict[GPU_INDEX] = [int(i) for i in idx]
+            else:
+                assert isinstance(idx, int), "{} must be an integer or a list of integers".format(GPU_INDEX)
+                conf_dict[GPU_INDEX] = idx
 
         if GPU_MEMORY_LIMIT in config:
             assert isinstance(config[GPU_MEMORY_LIMIT], int), "{} must be an integer number of MB".format(
@@ -110,9 +129,10 @@ def _set_gpu_config(config=None):
             )
             if config[GPU_MEMORY_LIMIT] < 0:
                 raise ValueError("{} must be not negative".format(GPU_MEMORY_LIMIT))
-            if conf_dict[GPU_INDEX] >= 0 and config[GPU_MEMORY_LIMIT] > 0:
+            indices = conf_dict[GPU_INDEX] if isinstance(conf_dict[GPU_INDEX], list) else [conf_dict[GPU_INDEX]]
+            if all(i >= 0 for i in indices) and config[GPU_MEMORY_LIMIT] > 0:
                 try:
-                    total_gpu_mem = get_gpu_memory(conf_dict[GPU_INDEX])
+                    total_gpu_mem = min(get_gpu_memory(i) for i in indices)
                 except Exception:
                     total_gpu_mem = 0
                 assert (
@@ -123,28 +143,58 @@ def _set_gpu_config(config=None):
     return conf_dict
 
 
-def init_gpu_config(gpu_config):
-    """Select the compute device. ``gpu_ind < 0`` -> CPU; ``mem_limit`` (MB) caps the caching allocator.
+def get_devices(gpu_config=None):
+    """Devices (``torch.device`` list) of the ranks of a fit; the first one is the main process.
 
-    The ``TORCHPOTENTIAL_DEVICE`` environment variable, if set, takes precedence.
+    Precedence: ``TORCHPOTENTIAL_DEVICES`` (comma-separated, e.g. ``cuda:0,cuda:1``), ``TORCHPOTENTIAL_DEVICE``,
+    ``gpu_config['gpu_ind']`` (int or list), else ``cuda:0`` / CPU. More than one device means a multi-process fit.
+    """
+    import os
+
+    env_list = os.environ.get(_device.ENV_DEVICES)
+    if env_list:
+        devs = [torch.device(d.strip()) for d in env_list.split(",") if d.strip()]
+        if devs:
+            return devs
+    if os.environ.get(_device.ENV_DEVICE):
+        return [torch.device(os.environ[_device.ENV_DEVICE])]
+
+    idx = _set_gpu_config(gpu_config)[GPU_INDEX]
+    indices = idx if isinstance(idx, list) else [idx]
+    if not torch.cuda.is_available():
+        if isinstance(idx, list):
+            raise RuntimeError("{} {} requested, but CUDA is not available".format(GPU_INDEX, idx))
+        return [torch.device("cpu")]
+    if not isinstance(idx, list) and idx < 0:
+        return [torch.device("cpu")]
+    n = torch.cuda.device_count()
+    for i in indices:
+        assert i < n, "GPU ind {} is requested, but there are only {} GPUs".format(i, n)
+    return [torch.device("cuda", i) for i in indices]
+
+
+def apply_memory_limit(device, mem_limit):
+    """Cap the caching allocator of this process on ``device`` to ``mem_limit`` MB (0 = no limit)."""
+    device = torch.device(device)
+    if mem_limit and device.type == "cuda":
+        idx = device.index if device.index is not None else torch.cuda.current_device()
+        frac = mem_limit / get_gpu_memory(idx)
+        torch.cuda.set_per_process_memory_fraction(min(frac, 1.0), idx)
+
+
+def init_gpu_config(gpu_config):
+    """Select the compute device of this process. ``gpu_ind < 0`` -> CPU; ``mem_limit`` (MB) caps the caching allocator.
+
+    With a list in ``gpu_ind`` (or ``TORCHPOTENTIAL_DEVICES``) the first entry is the device of this (main) process;
+    use :func:`get_devices` for the full list. ``TORCHPOTENTIAL_DEVICE``, if set, takes precedence over the config.
     """
     import os
 
     gpu_config = _set_gpu_config(gpu_config)
-    if os.environ.get(_device.ENV_DEVICE):
-        _device.set_device(os.environ[_device.ENV_DEVICE])
-        return gpu_config
-
-    idx = gpu_config[GPU_INDEX]
-    if idx < 0 or not torch.cuda.is_available():
-        _device.set_device("cpu")
-    else:
-        n = torch.cuda.device_count()
-        assert idx < n, "GPU ind {} is requested, but there are only {} GPUs".format(idx, n)
-        _device.set_device(torch.device("cuda", idx))
-        torch.cuda.set_device(idx)
-        if gpu_config[GPU_MEMORY_LIMIT] != 0:
-            frac = gpu_config[GPU_MEMORY_LIMIT] / get_gpu_memory(idx)
-            torch.cuda.set_per_process_memory_fraction(min(frac, 1.0), idx)
+    devices = get_devices(gpu_config)
+    _device.set_device(devices[0])
+    if devices[0].type == "cuda" and not os.environ.get(_device.ENV_DEVICE) and not os.environ.get(_device.ENV_DEVICES):
+        torch.cuda.set_device(devices[0])
+        apply_memory_limit(devices[0], gpu_config[GPU_MEMORY_LIMIT])
 
     return gpu_config
