@@ -10,8 +10,12 @@ ENV_NUM_THREADS = "TORCHPOTENTIAL_NUM_THREADS"
 _DEVICE = None
 
 
+def _is_xpu_available():
+    return hasattr(torch, "xpu") and torch.xpu.is_available()
+
+
 def get_device():
-    """Device used for new potentials/batches: env override, else the one set by init_gpu_config, else cuda:0/CPU."""
+    """Device used for new potentials/batches: env override, else the one set by init_gpu_config, else cuda:0/xpu:0/CPU."""
     global _DEVICE
     if _DEVICE is None:
         env = os.environ.get(ENV_DEVICE)
@@ -19,6 +23,8 @@ def get_device():
             _DEVICE = torch.device(env)
         elif torch.cuda.is_available():
             _DEVICE = torch.device("cuda", 0)
+        elif _is_xpu_available():
+            _DEVICE = torch.device("xpu", 0)
         else:
             _DEVICE = torch.device("cpu")
     return _DEVICE
@@ -31,10 +37,20 @@ def set_device(device):
 
 
 def is_oom_error(exc):
-    """True if ``exc`` is a (CUDA) out-of-memory error."""
-    oom = getattr(torch, "OutOfMemoryError", None) or torch.cuda.OutOfMemoryError
-    if isinstance(exc, oom):
-        return True
+    """True if ``exc`` is a (CUDA/XPU) out-of-memory error."""
+    oom_types = []
+    if hasattr(torch, "OutOfMemoryError"):
+        oom_types.append(torch.OutOfMemoryError)
+    if hasattr(torch.cuda, "OutOfMemoryError"):
+        oom_types.append(torch.cuda.OutOfMemoryError)
+    if hasattr(torch, "xpu") and hasattr(torch.xpu, "OutOfMemoryError"):
+        oom_types.append(torch.xpu.OutOfMemoryError)
+    for oom in oom_types:
+        try:
+            if isinstance(exc, oom):
+                return True
+        except Exception:
+            pass
     return isinstance(exc, RuntimeError) and "out of memory" in str(exc).lower()
 
 

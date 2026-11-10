@@ -90,9 +90,53 @@ def supply_batch(data):
     return batch_data
 
 
+def _available_accelerator():
+    if torch.cuda.is_available():
+        return "cuda"
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
+        return "xpu"
+    return None
+
+
+def _device_count(accel):
+    if accel == "cuda":
+        return torch.cuda.device_count()
+    if accel == "xpu":
+        return torch.xpu.device_count()
+    return 0
+
+
+def _set_device_index(accel, idx):
+    if accel == "cuda":
+        torch.cuda.set_device(idx)
+    elif accel == "xpu":
+        torch.xpu.set_device(idx)
+
+
+def _set_memory_fraction(accel, frac, idx):
+    if accel == "cuda":
+        torch.cuda.set_per_process_memory_fraction(frac, idx)
+    elif accel == "xpu":
+        torch.xpu.set_per_process_memory_fraction(frac, idx)
+
+
+def _get_device_properties(accel, idx):
+    if accel == "cuda":
+        return torch.cuda.get_device_properties(idx)
+    if accel == "xpu":
+        return torch.xpu.get_device_properties(idx)
+    raise RuntimeError("No accelerator available")
+
+
 def get_gpu_memory(gpu_id):
     """Total memory of the GPU in MB."""
-    return torch.cuda.get_device_properties(gpu_id).total_memory // (1024 * 1024)
+    accel = _available_accelerator()
+    if accel is None:
+        return 0
+    try:
+        return _get_device_properties(accel, gpu_id).total_memory // (1024 * 1024)
+    except Exception:
+        return 0
 
 
 def _set_gpu_config(config=None):
@@ -136,15 +180,16 @@ def init_gpu_config(gpu_config):
         return gpu_config
 
     idx = gpu_config[GPU_INDEX]
-    if idx < 0 or not torch.cuda.is_available():
+    accel = _available_accelerator()
+    if idx < 0 or accel is None:
         _device.set_device("cpu")
     else:
-        n = torch.cuda.device_count()
-        assert idx < n, "GPU ind {} is requested, but there are only {} GPUs".format(idx, n)
-        _device.set_device(torch.device("cuda", idx))
-        torch.cuda.set_device(idx)
+        n = _device_count(accel)
+        assert idx < n, "GPU ind {} is requested, but there are only {} {} GPUs".format(idx, n, accel)
+        _device.set_device(torch.device(accel, idx))
+        _set_device_index(accel, idx)
         if gpu_config[GPU_MEMORY_LIMIT] != 0:
             frac = gpu_config[GPU_MEMORY_LIMIT] / get_gpu_memory(idx)
-            torch.cuda.set_per_process_memory_fraction(min(frac, 1.0), idx)
+            _set_memory_fraction(accel, min(frac, 1.0), idx)
 
     return gpu_config
