@@ -8,7 +8,7 @@ from scipy.optimize import minimize, dual_annealing
 from torchpotential.constants import *
 from torchpotential.fitmetrics import FitMetrics
 from torchpotential.indexing import Batch
-from torchpotential.utils.utilities import batch_errors, batching_data
+from torchpotential.utils.utilities import batch_errors, batching_data, split_batch
 
 log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
@@ -449,7 +449,24 @@ class FitTorchPotential:
         return batching_data(datadf, batch_size=self.batch_size), True
 
     def predict(self, datadf=None):
+        """Loss-free prediction: energy/forces/stress and residuals for every batch of ``datadf`` (default:
+        the training data).
+
+        Keeps only this process's share of the training batches resident on the device afterward (as before);
+        every other ("foreign") batch is evaluated and released immediately, one at a time, and split into
+        pieces of at most ``batch_size // 4`` structures first. This matters after a distributed fit: ``datadf``
+        then covers the *whole* training set, most of which was never on this device (only this rank's shard
+        was), and this rank may already be near its memory capacity with that permanent shard plus a large,
+        permanently resident test set (see the class docstring / README). Evaluating a foreign batch at the
+        full fit ``batch_size`` can then need more transient memory than the little headroom left - confirmed on
+        real XPU hardware (``RuntimeError: ... UR_RESULT_ERROR_OUT_OF_RESOURCES``, not a typed/"out of memory"
+        error); splitting bounds that single call's memory instead.
+        """
         batches, temporary = self._batches_for(datadf)
+        keep = None
+        if not temporary and self._local_idx is not None and batches is self._train_batches:
+            keep = set(self._local_idx)
+        max_foreign_structures = max(1, self.batch_size // 4)
 
         pred_dict = {
             "energy_pred": [],
@@ -460,13 +477,14 @@ class FitTorchPotential:
             "df": [],
             "total_na": [],
         }
-        for b in batches:
-            _, partition = np.unique(b["e_map"], return_counts=True)
-            for i in range(1, len(partition)):
-                partition[i] += partition[i - 1]
-            e, f, s = self.tensorpot.evaluate(self._tbatch(b))
+
+        def consume(piece, forget):
+            _, partition = np.unique(piece["e_map"], return_counts=True)
+            for j in range(1, len(partition)):
+                partition[j] += partition[j - 1]
+            e, f, s = self.tensorpot.evaluate(self._tbatch(piece))
             e, f, s = e.cpu().numpy(), f.cpu().numpy(), s.cpu().numpy()
-            errors = self.compute_batch_errors(b, e, f)
+            errors = self.compute_batch_errors(piece, e, f)
             e_pred = e.reshape(-1)
             f_pred = np.split(f.reshape(-1, 3), partition)[:-1]
             s_pred = s.reshape(-1, 3, 3)
@@ -477,12 +495,16 @@ class FitTorchPotential:
             pred_dict["de_pa"] += list(errors[1].reshape(-1))
             pred_dict["df"] += list(np.split(errors[2].reshape(-1, 3), partition)[:-1])
             pred_dict["total_na"].append(errors[3])
-        if temporary:
-            self._forget(batches)
-        elif self._local_idx is not None and batches is self._train_batches:
-            # keep only this process's share of the training batches on the device
-            local = set(self._local_idx)
-            self._forget([b for i, b in enumerate(batches) if i not in local])
+            if forget:
+                self._forget([piece])
+
+        for i, b in enumerate(batches):
+            foreign = temporary or (keep is not None and i not in keep)
+            if foreign:
+                for piece in split_batch(b, max_foreign_structures):
+                    consume(piece, forget=True)
+            else:
+                consume(b, forget=False)
 
         return pred_dict
 

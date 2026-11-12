@@ -300,8 +300,8 @@ def _worker_main(fd, rank, device, mem_limit):
     dev = torch.device(device)
     device_utils.set_device(dev)
     device_utils.set_num_threads(None)
-    if dev.type == "cuda":
-        torch.cuda.set_device(dev)
+    if dev.type in ("cuda", "xpu"):
+        getattr(torch, dev.type).set_device(dev)
         apply_memory_limit(dev, mem_limit)
 
     state = {}
@@ -309,8 +309,8 @@ def _worker_main(fd, rank, device, mem_limit):
     def free():
         state.clear()
         gc.collect()
-        if dev.type == "cuda":
-            torch.cuda.empty_cache()
+        if dev.type in ("cuda", "xpu"):
+            getattr(torch, dev.type).empty_cache()
 
     conn.send(("ok", rank))
     while True:

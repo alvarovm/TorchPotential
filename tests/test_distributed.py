@@ -84,7 +84,7 @@ def test_get_devices_env_precedence(monkeypatch):
     assert [str(d) for d in get_devices({"gpu_ind": [0, 1]})] == ["cpu"]
     monkeypatch.delenv(device_utils.ENV_DEVICE)
     assert [str(d) for d in get_devices({"gpu_ind": -1})] == ["cpu"]
-    if not torch.cuda.is_available():
+    if device_utils._available_accelerator() is None:
         with pytest.raises(RuntimeError):
             get_devices({"gpu_ind": [0, 1]})
 
@@ -150,10 +150,23 @@ def test_predict_after_distributed_fit(pool2):
     case = _case("bfgs_unary_aux", batch_size=1, niter=3)
     serial, _, df = run_case(case)
     dist, _, _ = run_case(case, pool=pool2)
+
+    # peak device-resident batch count during predict(): this process's permanent shard plus at most one
+    # transient "foreign" batch at a time - never the whole training set staged on one device at once.
+    sizes = []
+    original = dist._tbatch
+
+    def tracked(b):
+        result = original(b)
+        sizes.append(len(dist._tbatches))
+        return result
+
+    dist._tbatch = tracked
     ps, pd_ = serial.predict(df.copy()), dist.predict(df.copy())
     np.testing.assert_allclose(pd_["energy_pred"], ps["energy_pred"], rtol=1e-8, atol=1e-9)
     # only this process's share of the training batches stays on the device
     assert len(dist._tbatches) == len(dist._local_idx)
+    assert max(sizes) <= len(dist._local_idx) + 1
 
 
 # ------------------------------------------------------------------------------------------------
@@ -226,14 +239,25 @@ def test_merge_results_orders_errors_by_batch_index():
 # ------------------------------------------------------------------------------------------------
 # GPU
 # ------------------------------------------------------------------------------------------------
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
-def test_two_processes_on_one_gpu_match_serial():
-    pool = DevicePool(["cuda:0", "cuda:0"], num_threads=1)
+@pytest.mark.parametrize("kind", ["cuda", "xpu"])
+@pytest.mark.parametrize("indices", [(0, 0), (0, 1)], ids=["shared-gpu", "two-gpus"])
+@pytest.mark.parametrize("name", ["bfgs_unary_aux", "lbfgsb_binary_mask"])
+def test_gpu_workers_match_serial(kind, indices, name):
+    api = getattr(torch, kind, None)
+    if api is None or not api.is_available() or api.device_count() <= max(indices):
+        pytest.skip("needs {} with at least {} GPU(s)".format(kind, max(indices) + 1))
+    devices = ["{}:{}".format(kind, i) for i in indices]
+    pool = DevicePool(devices, num_threads=1, mem_limit=8192, timeout=120)
     try:
-        case = _case("bfgs_unary_aux", batch_size=1, niter=4)
+        case = _case(name, batch_size=1, niter=4)
         serial, final_s, _ = run_case(case, device="cpu")
-        dist, final_d, _ = run_case(case, pool=pool, device="cuda:0")
+        dist, final_d, _ = run_case(case, pool=pool, device=devices[0])
         np.testing.assert_allclose(dist.loss_history, serial.loss_history, rtol=1e-8)
         np.testing.assert_allclose(final_d, final_s, rtol=1e-6, atol=1e-8)
+        pool.release()
+        assert pool.active == []
+        reused, final_r, _ = run_case(case, pool=pool, device=devices[0])
+        np.testing.assert_allclose(reused.loss_history, dist.loss_history, rtol=1e-10)
+        np.testing.assert_allclose(final_r, final_d, rtol=1e-8, atol=1e-10)
     finally:
         pool.close()
